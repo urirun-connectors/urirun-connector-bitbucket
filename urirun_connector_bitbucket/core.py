@@ -79,6 +79,7 @@ def account_query_twin(max_items: int = 1000, workspace: str = "", instance_id: 
     try:
         if not 1 <= int(max_items) <= 5000:
             raise ValueError("forge_twin_limit_invalid")
+        workspace = workspace.strip() or os.environ.get("BITBUCKET_WORKSPACE", "").strip()
         if workspace:
             repository_identity(workspace, "scope")
         client = _client()
