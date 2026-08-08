@@ -1,0 +1,24 @@
+{
+  "id": "bitbucket",
+  "name": "Bitbucket Cloud",
+  "status": "available",
+  "category": "DevOps",
+  "summary": "Governed Bitbucket Cloud repository, pull-request, and branch operations.",
+  "description": "A Bitbucket Cloud adapter implementing normalized forge snapshots and exact-head mutation receipts.",
+  "install": {"mode": "urirun-extra", "pipSpec": "urirun-connector-bitbucket @ git+https://github.com/urirun-connectors/urirun-connector-bitbucket.git@main"},
+  "provenance": "verified",
+  "publisher": {"name": "if-uri", "url": "https://ifuri.com", "github": "https://github.com/urirun-connectors"},
+  "docsUrl": "https://github.com/urirun-connectors/urirun-connector-bitbucket",
+  "keywords": ["git", "bitbucket", "pull-request", "forge"],
+  "uriSchemes": ["bitbucket"],
+  "routes": [
+    "bitbucket://host/auth/query/status",
+    "bitbucket://host/repository/query/snapshot",
+    "bitbucket://host/change-request/command/close",
+    "bitbucket://host/branch/command/archive",
+    "bitbucket://host/branch/command/delete",
+    "bitbucket://host/branch/command/restore",
+    "bitbucket://host/doctor/query/report"
+  ],
+  "adapterKinds": ["remote-http"]
+}
