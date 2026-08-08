@@ -13,6 +13,7 @@
   "uriSchemes": ["bitbucket"],
   "routes": [
     "bitbucket://host/auth/query/status",
+    "bitbucket://host/account/query/twin",
     "bitbucket://host/repository/query/snapshot",
     "bitbucket://host/change-request/command/close",
     "bitbucket://host/branch/command/archive",

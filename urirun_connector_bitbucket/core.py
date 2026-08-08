@@ -9,7 +9,10 @@ from importlib.metadata import version
 from typing import Any
 
 import urirun
-from urirun_connector_forge import ForgeHttpClient, operation_receipt, repository_identity, require_ref, require_sha
+from urirun_connector_forge import (
+    ForgeHttpClient, account_twin, operation_receipt, repository_identity,
+    require_ref, require_sha, twin_fact,
+)
 
 CONNECTOR_ID = "bitbucket"
 _make_connector = getattr(urirun, "connector", None) or importlib.import_module("urirun._connector").connector
@@ -52,6 +55,105 @@ def auth_status() -> dict[str, Any]:
         return urirun.ok(authenticated=True, provider="bitbucket", username=user.get("username", ""))
     except (RuntimeError, ValueError) as error:
         return urirun.fail(str(error), authenticated=False, provider="bitbucket")
+
+
+def _pages(client: ForgeHttpClient, path: str, max_items: int) -> tuple[list[Any], bool, int]:
+    rows: list[Any] = []
+    page = 1
+    requests = 0
+    while len(rows) < max_items:
+        _, payload, _ = client.request(
+            "GET", path, query={"page": page, "pagelen": min(100, max_items - len(rows))}
+        )
+        requests += 1
+        values = list(payload.get("values") or [])
+        rows.extend(values)
+        if not payload.get("next"):
+            return rows[:max_items], True, requests
+        page += 1
+    return rows[:max_items], False, requests
+
+
+@conn.handler("account/query/twin", isolated=True, meta={"label": "Map visible Bitbucket Cloud resources"})
+def account_query_twin(max_items: int = 1000, workspace: str = "", instance_id: str = "") -> dict[str, Any]:
+    try:
+        if not 1 <= int(max_items) <= 5000:
+            raise ValueError("forge_twin_limit_invalid")
+        if workspace:
+            repository_identity(workspace, "scope")
+        client = _client()
+        _, user, _ = client.request("GET", "/user")
+        requests = 1
+        complete = True
+        if workspace:
+            _, scope, _ = client.request("GET", f"/workspaces/{urllib.parse.quote(workspace, safe='')}")
+            workspace_rows = [{"workspace": scope, "administrator": False}]
+            requests += 1
+        else:
+            workspace_rows, complete, used = _pages(client, "/user/workspaces", int(max_items))
+            requests += used
+        scopes: list[dict[str, Any]] = []
+        repositories: list[dict[str, Any]] = []
+        for access in workspace_rows:
+            scope = access.get("workspace") or access
+            slug = str(scope.get("slug") or "")
+            if not slug:
+                continue
+            workspace_id = f"workspace:{scope.get('uuid') or slug}"
+            scopes.append({
+                "id": workspace_id, "name": slug, "kind": "workspace",
+                "role": "administrator" if access.get("administrator") else "member",
+                "private": bool(scope.get("is_private")),
+                "url": (scope.get("links") or {}).get("html", {}).get("href", ""), "parent_id": "",
+            })
+            projects, projects_complete, used = _pages(
+                client, f"/workspaces/{urllib.parse.quote(slug, safe='')}/projects", int(max_items)
+            )
+            requests += used
+            complete = complete and projects_complete
+            for project in projects:
+                scopes.append({
+                    "id": f"project:{project.get('uuid') or project.get('key')}",
+                    "name": project.get("key") or project.get("name", ""), "kind": "project",
+                    "role": "member", "private": bool(project.get("is_private")),
+                    "url": (project.get("links") or {}).get("html", {}).get("href", ""),
+                    "parent_id": workspace_id,
+                })
+            remaining = int(max_items) - len(repositories)
+            if remaining <= 0:
+                complete = False
+                break
+            repo_rows, repos_complete, used = _pages(
+                client, f"/repositories/{urllib.parse.quote(slug, safe='')}", remaining
+            )
+            requests += used
+            complete = complete and repos_complete
+            repositories.extend({
+                "id": f"repository:{row.get('uuid') or row.get('full_name')}",
+                "full_name": row.get("full_name", ""), "scope_id": workspace_id,
+                "project_id": f"project:{(row.get('project') or {}).get('uuid') or (row.get('project') or {}).get('key', '')}",
+                "default_branch": (row.get("mainbranch") or {}).get("name", ""),
+                "visibility": "private" if row.get("is_private") else "public",
+                "archived": False, "fork": bool(row.get("parent")),
+                "url": (row.get("links") or {}).get("html", {}).get("href", ""),
+                "updated_at": row.get("updated_on", ""), "size_bytes": int(row.get("size") or 0),
+                "features": [name for name, enabled in {
+                    "issues": row.get("has_issues"), "wiki": row.get("has_wiki"),
+                    "pipelines": row.get("has_pipelines"), "pull_requests": True,
+                }.items() if enabled],
+            } for row in repo_rows)
+        twin = account_twin(
+            provider="bitbucket", instance_id=instance_id.strip() or "bitbucket.org",
+            subject={"id": str(user.get("uuid", "")), "username": user.get("username", ""),
+                     "display_name": user.get("display_name", ""), "account_type": user.get("type", "user")},
+            scopes=scopes, repositories=repositories,
+            capabilities={"workspaces": True, "projects": True, "pull_requests": True,
+                          "pipelines": True, "self_managed": False},
+            complete=complete, requests=requests,
+        )
+        return urirun.ok(**twin, twin_fact=twin_fact(twin, "bitbucket://host/account/query/twin"))
+    except (RuntimeError, ValueError) as error:
+        return urirun.fail(str(error), provider="bitbucket", mutation_attempted=False)
 
 
 @conn.handler("repository/query/snapshot", isolated=True, meta={"label": "Bitbucket repository snapshot"})
@@ -213,7 +315,7 @@ def _version() -> str:
     try:
         return version("urirun-connector-bitbucket")
     except Exception:
-        return "0.1.0"
+        return "0.2.0"
 
 
 def urirun_bindings() -> dict[str, Any]:
